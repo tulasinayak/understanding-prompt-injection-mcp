@@ -1,0 +1,32 @@
+[project]
+name = "mcp-injection-testbed"
+version = "0.1.0"
+description = "Understanding Prompt Injection through MCP Tools: Attack and Defense"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.9",
+    "langgraph>=0.4",
+    "langchain-core>=0.3",
+    "langchain-ollama>=0.3.3",
+    "langchain-mcp-adapters>=0.1",
+    "pyyaml>=6",
+    "streamlit>=1.50",
+    "pandas>=2",
+]
+
+[project.optional-dependencies]
+tracing = ["langfuse>=3"]
+hosted = ["langchain-openai>=0.3"]
+classifier = ["transformers>=4.40", "torch>=2.2"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = ["live: needs a running Ollama server and a pulled model"]
+addopts = "-m 'not live'"

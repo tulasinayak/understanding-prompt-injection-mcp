@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:   # the live attack suite runs only when started by hand from the Actions tab
+
+env:
+  TESTBED_MODEL: qwen3:1.7b   # small enough for a CPU runner; headline numbers come from qwen3:8b locally
+
+jobs:
+  unit:
+    name: Unit and scripted pipeline tests (no model)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync
+      - run: uv run pytest -q
+
+  attack-suite:
+    name: Live attack suite (small Qwen on Ollama)
+    needs: unit
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync
+
+      - name: Cache Ollama models
+        uses: actions/cache@v4
+        with:
+          path: ~/.ollama/models
+          key: ollama-${{ env.TESTBED_MODEL }}
+
+      - name: Install and start Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          sudo systemctl stop ollama || true
+          nohup ollama serve > ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:11434/api/tags > /dev/null && break; sleep 1; done
+          ollama pull "$TESTBED_MODEL"
+
+      - name: Attack suite (fails if the agent got easier to hijack)
+        run: uv run pytest -m live -v
+
+      - name: Upload audit trail
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-trail
+          path: |
+            results/ci-audit.jsonl
+            ollama.log
