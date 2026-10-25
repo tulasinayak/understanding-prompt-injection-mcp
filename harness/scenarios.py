@@ -39,6 +39,7 @@ class Scenario:
     ci: bool = False                   # part of the small CI subset
     holdout: bool = False              # keep out of defense tuning
     source: str = "custom"             # builtin | custom | a dataset name such as llmail
+    lang: str = "en"                   # language of the injected instruction
 
     @property
     def attack_kind(self) -> str:
@@ -49,7 +50,7 @@ class Scenario:
         d = {"id": self.id, "description": self.description, "goal": self.goal, "style": self.style,
              "user_task": self.user_task, "carrier": self.carrier, "payload": self.payload,
              "attack_succeeds_if": self.attack_succeeds_if, "task_succeeds_if": self.task_succeeds_if,
-             "allowed_tools": self.allowed_tools}
+             "allowed_tools": self.allowed_tools, "lang": None if self.lang == "en" else self.lang}
         return {k: v for k, v in d.items() if v not in ("", None, {}, [])}
 
 
@@ -71,6 +72,9 @@ def parse_scenario(raw: dict, source: str = "custom", where: str = "") -> Scenar
             fail(f"missing required field '{key}'")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", str(raw["id"])):
         fail("id may only contain lowercase letters, digits, '-' and '_'")
+    lang = str(raw.get("lang") or "en").lower()
+    if not re.fullmatch(r"[a-z]{2,3}(-[a-z0-9]{2,8})?", lang):
+        fail("lang must be a language code such as en, de, hi or kok")
 
     carrier = dict(raw["carrier"])
     if carrier.get("type") not in CARRIER_TYPES:
@@ -100,7 +104,22 @@ def parse_scenario(raw: dict, source: str = "custom", where: str = "") -> Scenar
         allowed_tools=raw.get("allowed_tools"), description=str(raw.get("description", "")),
         goal=str(raw.get("goal", "")), style=str(raw.get("style", "")),
         ci=bool(raw.get("ci", False)), holdout=bool(raw.get("holdout", False)), source=source,
+        lang=lang,
     )
+
+
+INBOX_TOOLS = {"list_emails", "read_email", "send_email", "delete_email"}
+
+
+def email_only(scenario: Scenario) -> bool:
+    """True if the scenario can run with the inbox MCP server alone: the payload sits in an
+    email and every tool the attack or the task refers to is an inbox tool."""
+    named = {p["tool"] for p in scenario.attack_succeeds_if if "tool" in p}
+    wanted = scenario.task_succeeds_if.get("tool_executed")
+    if wanted:
+        named.add(wanted["tool"])
+    named |= set(scenario.allowed_tools or [])
+    return scenario.carrier["type"] == "email" and named <= INBOX_TOOLS
 
 
 def load_scenarios(kind: str = "all") -> list[Scenario]:

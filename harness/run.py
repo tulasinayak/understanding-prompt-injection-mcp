@@ -33,10 +33,11 @@ from defenses.guard import Guard, strip_think
 from defenses.policy import ToolPolicy
 from defenses.quarantine import ASK_TOOL, DUAL_SYSTEM, DualLLM, NaiveSummarizer
 from defenses.toolfilter import select_tools
-from harness.scenarios import ROOT, Scenario, build_world, get_scenario, load_scenarios
+from harness.scenarios import ROOT, Scenario, build_world, email_only, get_scenario, load_scenarios
 
 DEFAULT_AUDIT = ROOT / "results" / "audit.jsonl"
-SERVERS = ("inbox_server.py", "files_server.py", "calendar_server.py")
+SERVERS = ("inbox", "files", "calendar")
+EMAIL_AUDIT = ROOT / "results" / "audit-email.jsonl"
 
 
 @dataclass
@@ -101,7 +102,7 @@ def judge_task(records: list, final_answer: str, cond: dict) -> bool:
 
 # ---- running -----------------------------------------------------------------
 
-async def _connect_tools(stack: AsyncExitStack, world_path: str) -> dict:
+async def _connect_tools(stack: AsyncExitStack, world_path: str, servers=SERVERS) -> dict:
     from langchain_mcp_adapters.tools import load_mcp_tools
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
@@ -109,7 +110,8 @@ async def _connect_tools(stack: AsyncExitStack, world_path: str) -> dict:
     errlog = stack.enter_context(open(os.devnull, "w"))
     env = {**os.environ, "TESTBED_WORLD": world_path, "PYTHONUTF8": "1"}
     tools = {}
-    for script in SERVERS:
+    for name in servers:
+        script = f"{name}_server.py"
         params = StdioServerParameters(command=sys.executable,
                                        args=[str(ROOT / "servers" / script)], env=env)
         read, write = await stack.enter_async_context(stdio_client(params, errlog=errlog))
@@ -124,6 +126,7 @@ async def run_scenario_async(
     scenario: Scenario, defense="none", model=DEFAULT_MODEL, *, inject: bool = True,
     audit_path=DEFAULT_AUDIT, on_event=None, seed: int = 42, temperature: float = 0.0,
     repeat: int = 0, guard_model=None, aux_model=None, classifier=None, max_steps: int = 8,
+    servers=SERVERS,
 ) -> RunResult:
     """`model`, `guard_model` and `aux_model` are model names, or chat-model objects (used by tests).
     `aux_model` serves the detector, summarizer, quarantined model and tool filter; default: `model`."""
@@ -133,12 +136,13 @@ async def run_scenario_async(
     audit = AuditLog(audit_path) if audit_path else None
     ident = {"run_id": run_id, "scenario_id": scenario.id, "model": model_name,
              "defense": cfg.label, "injected": inject, "repeat": repeat,
-             "source": scenario.source, "goal": scenario.goal, "attack_kind": scenario.attack_kind}
+             "source": scenario.source, "goal": scenario.goal, "attack_kind": scenario.attack_kind,
+             "lang": scenario.lang}
     result = RunResult(run_id=run_id, scenario_id=scenario.id, defense=cfg.label,
                        model=model_name, injected=inject)
     if audit:
         audit.append({"type": "run_start", **ident, "user_task": scenario.user_task, "seed": seed,
-                      "temperature": temperature,
+                      "temperature": temperature, "servers": list(servers),
                       "model_digest": model_digest(model) if isinstance(model, str) else None})
 
     world_file = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
@@ -150,7 +154,7 @@ async def run_scenario_async(
     filter_calls = 0
     try:
         async with AsyncExitStack() as stack:
-            tools = await _connect_tools(stack, world_file.name)
+            tools = await _connect_tools(stack, world_file.name, servers)
             llm = make_chat_model(model, temperature, seed) if isinstance(model, str) else model
             guard = None
             if cfg.guard:
@@ -207,7 +211,9 @@ async def run_scenario_async(
             result.guard_calls = guard.calls if guard else 0
             result.aux_calls = filter_calls + sum(x.calls for x in (detector, summarizer, dual) if x)
     except Exception as exc:
-        inner = exc.exceptions[0] if isinstance(exc, BaseExceptionGroup) and exc.exceptions else exc
+        inner = exc
+        while isinstance(inner, BaseExceptionGroup) and inner.exceptions:  # task groups nest them
+            inner = inner.exceptions[0]
         result.error = f"{type(inner).__name__}: {inner}"
     finally:
         try:
@@ -300,7 +306,8 @@ def main() -> None:
     ap.add_argument("--benign", action="store_true", help="same task without the injected payload")
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--audit", default=str(DEFAULT_AUDIT))
+    ap.add_argument("--audit", help="audit file (default: results/audit.jsonl, or audit-email.jsonl with --email-only)")
+    ap.add_argument("--email-only", action="store_true", help="only the inbox MCP server")
     a = ap.parse_args()
 
     if a.list or not a.scenario:
@@ -311,7 +318,11 @@ def main() -> None:
     print(f"{s.id} | defense={DefenseConfig.parse(a.defense).label} | model={a.model}"
           f"{' | benign' if a.benign else ''}")
     print(f"  task: {s.user_task}")
-    r = run_scenario(s, a.defense, a.model, inject=not a.benign, audit_path=Path(a.audit),
+    if a.email_only and not email_only(s):
+        raise SystemExit(f"{s.id} needs more than the inbox server.")
+    audit = Path(a.audit or (EMAIL_AUDIT if a.email_only else DEFAULT_AUDIT))
+    r = run_scenario(s, a.defense, a.model, inject=not a.benign, audit_path=audit,
+                     servers=("inbox",) if a.email_only else SERVERS,
                      on_event=print_event, seed=a.seed, temperature=a.temperature)
     print_result(r)
 
