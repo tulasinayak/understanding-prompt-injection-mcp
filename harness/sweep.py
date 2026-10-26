@@ -16,8 +16,9 @@ from pathlib import Path
 from agent.model import DEFAULT_MODEL
 from audit.logger import read_records
 from defenses.config import STUDY, DefenseConfig
-from harness.run import DEFAULT_AUDIT, run_scenario, setup_console
-from harness.scenarios import load_scenarios
+from harness.metrics import is_infra_error
+from harness.run import DEFAULT_AUDIT, EMAIL_AUDIT, SERVERS, run_scenario, setup_console
+from harness.scenarios import email_only, load_scenarios
 
 
 def pick_scenarios(spec: str, include_holdout: bool):
@@ -44,11 +45,17 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--no-benign", action="store_true", help="skip the runs without injection")
     ap.add_argument("--include-holdout", action="store_true")
-    ap.add_argument("--audit", default=str(DEFAULT_AUDIT))
+    ap.add_argument("--audit", help="audit file (default: results/audit.jsonl, or audit-email.jsonl with --email-only)")
+    ap.add_argument("--email-only", action="store_true",
+                    help="only the inbox MCP server, and only scenarios that need nothing else")
     ap.add_argument("--dry-run", action="store_true", help="only print how many runs are left")
     a = ap.parse_args()
 
     scenarios = pick_scenarios(a.scenarios, a.include_holdout)
+    if a.email_only:
+        scenarios = [s for s in scenarios if email_only(s)]
+    a.audit = a.audit or str(EMAIL_AUDIT if a.email_only else DEFAULT_AUDIT)
+    servers = ("inbox",) if a.email_only else SERVERS
     wanted = STUDY if a.defenses == "study" else a.defenses.split(",")
     defenses = [DefenseConfig.parse(d).label for d in wanted]
     done = {(r["scenario_id"], DefenseConfig.parse(r["defense"]).label, r["model"], r["injected"],
@@ -78,13 +85,18 @@ def main() -> None:
         todo = todo[:a.limit]
         print(f"Running {len(todo)} of them now (--limit).")
 
+    failures_in_a_row = 0
     for n, (s, d, inject, rep) in enumerate(todo, start=1):
-        r = run_scenario(s, d, a.model, inject=inject, audit_path=Path(a.audit),
+        r = run_scenario(s, d, a.model, inject=inject, audit_path=Path(a.audit), servers=servers,
                          seed=rep, temperature=a.temperature, repeat=rep)
         kind = "attack" if inject else "benign"
         outcome = "ERROR " + r.error if r.error else (
             ("HIJACKED" if r.hijacked else "safe") if inject else "") + (" task-ok" if r.task_ok else " task-failed")
         print(f"[{n}/{len(todo)}] {d:<9} {kind} {s.id:<34} rep{rep} {r.duration_s:>6}s  {outcome}", flush=True)
+        failures_in_a_row = failures_in_a_row + 1 if is_infra_error(r.error) else 0
+        if failures_in_a_row == 3:
+            raise SystemExit("Stopping: three runs in a row failed outside the agent (is Ollama running?). "
+                             "Fix that and start the sweep again; failed runs are retried.")
     print("Done. Summary: uv run python -m harness.metrics")
 
 

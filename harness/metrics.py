@@ -28,28 +28,45 @@ def _rate(successes: int, n: int) -> dict:
     return {"k": successes, "n": n, "rate": successes / n if n else None, "lo": lo, "hi": hi}
 
 
+def is_infra_error(error: str | None) -> bool:
+    """True when the run failed for reasons outside the agent (Ollama down, server crash).
+    Such runs say nothing about the defense and are left out of every rate. Hitting the
+    step limit is the agent's own failure and still counts."""
+    return bool(error) and not error.startswith("stopped after")
+
+
 def run_ends(path) -> list[dict]:
     """Finished runs, with defense labels in their current spelling (old logs say d1, all, ...)
-    and the fields newer logs added filled in from the scenario files where missing."""
+    and the fields newer logs added filled in from the scenario files where missing.
+    Runs with an infrastructure error, and runs of scenarios no longer in scenarios/, are dropped;
+    if a run was repeated, the last one counts."""
     from defenses.config import DefenseConfig
     from harness.scenarios import load_scenarios
     known = {s.id: s for s in load_scenarios("all")}
-    runs = []
+    latest = {}
     for r in read_records(path):
-        if r.get("type") != "run_end":
+        if r.get("type") != "run_end" or is_infra_error(r.get("error")):
+            continue
+        if r["scenario_id"] not in known:   # scenario was removed from the study
             continue
         r["defense"] = DefenseConfig.parse(r["defense"]).label
         s = known.get(r["scenario_id"])
         r.setdefault("source", s.source if s else "unknown")
         r.setdefault("goal", s.goal if s else "")
         r.setdefault("attack_kind", s.attack_kind if s else "tool")
+        r.setdefault("lang", s.lang if s else "en")
         r.setdefault("aux_calls", 0)
-        runs.append(r)
-    return runs
+        latest[(r["scenario_id"], r["defense"], r["model"], r["injected"], r.get("repeat", 0))] = r
+    return list(latest.values())
+
+
+def infra_errors(path) -> int:
+    return sum(1 for r in read_records(path)
+               if r.get("type") == "run_end" and is_infra_error(r.get("error")))
 
 
 def summarize(runs: list[dict]) -> list[dict]:
-    """One row per (model, defense). Runs that errored count as not hijacked / task failed.
+    """One row per (model, defense). Runs that hit the step limit count as not hijacked / task failed.
     asr_tool / asr_answer split the attacks by what the attacker wanted: an action, or a
     wrong answer to the user."""
     groups = defaultdict(list)
