@@ -181,8 +181,24 @@ def _setup(audit_path: Path, model: str) -> list[str]:
     ]
 
 
+def _model_table(all_runs: list[dict]) -> str:
+    """Model x defense: ASR, task kept under attack, benign utility. Only defenses run on every model."""
+    models = sorted({r["model"] for r in all_runs})
+    shared = set.intersection(*({r["defense"] for r in all_runs if r["model"] == m} for m in models))
+    out = ["| model | defense | ASR | task kept under attack | benign utility |", "|---|---|---|---|---|"]
+    for m in models:
+        for d in sorted(shared, key=_order):
+            att = [r for r in all_runs if r["model"] == m and r["defense"] == d and r["injected"]]
+            ben = [r for r in all_runs if r["model"] == m and r["defense"] == d and not r["injected"]]
+            out.append(f"| {m} | {d} | {fmt_rate(_rate(sum(r['hijacked'] for r in att), len(att)))} | "
+                       f"{fmt_rate(_rate(sum(r['task_ok'] for r in att), len(att)))} | "
+                       f"{fmt_rate(_rate(sum(r['task_ok'] for r in ben), len(ben)))} |")
+    return "\n".join(out)
+
+
 def build(audit_path: Path, model: str | None = None) -> str:
     runs = run_ends(audit_path)
+    all_runs = runs
     models = sorted({r["model"] for r in runs})
     if model is None and models:
         model = max(models, key=lambda m: sum(r["model"] == m for r in runs))
@@ -242,6 +258,12 @@ def build(audit_path: Path, model: str | None = None) -> str:
             "## Language x defense", "",
             "Scenarios carry a `lang` field (default `en`). Benign utility per language is measured on the "
             "user tasks used by that language's attacks.", "", _lang_table(runs), "",
+            *(["## Models compared", "",
+               f"This log has runs from {len(models)} models: {', '.join(f'`{m}`' for m in models)}. The "
+               "rest of this report is about the model above; this table compares them on the defenses "
+               "every model was run with. A model with low benign utility cannot use the tools reliably, "
+               "so a low ASR for it does not mean it is safe.", "", _model_table(all_runs), ""]
+              if len(models) > 1 else []),
             "## Attacks grouped by malicious intent", "",
             "How many distinct attacks fall under each intent, and what happens to them with no "
             "defense and with the layered defense (`spotlight+policy+guard`). *ASR* is attack success "
