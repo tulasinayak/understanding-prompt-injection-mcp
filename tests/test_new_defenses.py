@@ -81,8 +81,6 @@ def test_dataset_scenarios_load_with_their_source():
     assert len(by_source["agentdojo"]) == 16
     assert {s.style for s in by_source["agentdojo"]} == {
         "ignore_previous", "injecagent", "important_instructions", "tool_knowledge"}
-    for s in by_source.get("llmail", []):
-        assert s.attack_succeeds_if[0]["args_contain"]["to"] == "contact@contact.com"
 
 
 # ---- pipeline -----------------------------------------------------------------
@@ -184,3 +182,14 @@ def test_answer_corruption_counts_as_hijack_without_any_forbidden_tool_call(tmp_
     r = run_scenario(s, "policy", model, audit_path=tmp_path / "a.jsonl")
     assert r.hijacked and not r.task_ok
     assert all(step["executed"] for step in r.steps)   # the policy had nothing to block
+
+
+def test_email_only_mode_runs_with_just_the_inbox_server(scenario, tmp_path):
+    from harness.scenarios import email_only
+    assert email_only(scenario)
+    assert not email_only(get_scenario("pivot-email-to-calendar"))   # needs the calendar
+    assert not email_only(get_scenario("exfil-fakesystem-salaries"))  # payload is in a file
+    model = obedient_model()
+    r = run_scenario(scenario, "policy", model, servers=("inbox",), audit_path=tmp_path / "a.jsonl")
+    assert model.tool_names == ["list_emails", "read_email", "send_email", "delete_email"]
+    assert r.error is None and not r.hijacked and r.attack_attempted

@@ -17,10 +17,10 @@ same attacks:
 | `policy` | allow-list + taint rule, in plain code | what the model may do | `defenses/policy.py` |
 | `guard` | a second model approves each side-effect action | what the model may do | `defenses/guard.py` |
 
-Attacks come from four sources: 26 built-in scenarios, 16 built from the AgentDojo attack
-templates, 20 real emails sampled from the LLMail-Inject challenge, and your own
-(`scenarios/custom/`). The two external sets are not stored in this repository; one command
-each generates them locally (see [scenarios/datasets/README.md](scenarios/datasets/README.md)). The comparison table is generated into `results/REPORT.md`.
+Attacks come from three sources: 26 built-in scenarios, 16 built from the AgentDojo attack
+templates, and your own (`scenarios/custom/`). LLMail-Inject and InjecAgent were tried and dropped
+because their attacks did not transfer to this setup (see FUTURE_WORK.md). The AgentDojo set is not stored in this repository; one command
+generates it locally (see [scenarios/datasets/README.md](scenarios/datasets/README.md)). The comparison table is generated into `results/REPORT.md`.
 
 Every tool call goes into a hash-chained audit trail (`results/*.jsonl`, schema in
 `audit/schema.md`), and all verdicts are computed from that trail. Research design, limits and
@@ -370,20 +370,15 @@ study sweep below and written to `results/REPORT.md`; until that has run, there 
 |---|---|---|
 | `scenarios/builtin/` | 26 | hand-written: exfiltration, unauthorized sends, destruction, cross-tool pivots, attacks aimed at specific defenses, and data-corruption / redirect attacks. Four are marked `holdout`. |
 | `scenarios/datasets/agentdojo_templates.yaml` | 16 | the four named attack wordings of the AgentDojo benchmark (`ignore_previous`, `injecagent`, `important_instructions`, `tool_knowledge`), each with four attacker goals expressed for our tools. Regenerate with `uv run python tools/gen_agentdojo.py`. |
-| `scenarios/datasets/llmail_sample.yaml` | 20 | emails written by participants of the LLMail-Inject challenge (Abdelnabi et al., 2025; Hugging Face `microsoft/llmail-inject-challenge`, MIT license) that the challenge marked as successful. Goal as in the challenge: get the assistant to email `contact@contact.com`. Sampled with a fixed seed, one per team; `tools/import_llmail.py`. They were tuned against other models, so this measures transfer. |
 | `scenarios/custom/` | yours | see "Adding your own tests". |
 
 AgentDojo: Debenedetti et al., 2024, `ethz-spylab/agentdojo`, MIT license.
 
-The two `scenarios/datasets/` files are not part of this repository. Generate them before running
+The `scenarios/datasets/` file is not part of this repository. Generate it before running
 the study:
 
 ```bash
 uv run python tools/gen_agentdojo.py
-```
-
-```bash
-uv run python tools/import_llmail.py
 ```
 
 Sources, licenses and details: [scenarios/datasets/README.md](scenarios/datasets/README.md).
@@ -412,6 +407,25 @@ uv run python -m harness.report
 
 `results/REPORT.md` has the main table, breakdowns by attack source and attacker goal, and for each
 defense the attacks that got through and the benign tasks it broke, with a real trace of each.
+
+### Email-only study
+
+The same study restricted to the inbox MCP server: the agent gets only `list_emails`,
+`read_email`, `send_email` and `delete_email`, and only scenarios whose payload is in an email and
+that need no other tool are run (17 of them; 231 runs). Results go to
+`results/audit-email.jsonl` and `results/REPORT-email.md`, separate from the three-server study.
+
+```bash
+uv run python -m harness.sweep --email-only --dry-run
+```
+
+```bash
+uv run python -m harness.sweep --email-only --limit 300
+```
+
+```bash
+uv run python -m harness.report results/audit-email.jsonl
+```
 
 To look at individual runs step by step:
 
@@ -534,7 +548,7 @@ defenses/    the nine defenses and the defense config
 audit/       hash-chained JSONL logger + schema
 harness/     run (one run), tryout (by hand), sweep (study), metrics, report, scenario loading
 tools/       dataset import scripts, show_runs
-scenarios/   builtin/ (26 attacks), datasets/ (AgentDojo templates, LLMail-Inject sample), custom/ (yours)
+scenarios/   builtin/ (26 attacks), datasets/ (AgentDojo templates), custom/ (yours)
 gui/         Streamlit app
 tests/       unit, scripted pipeline, GUI smoke, live attack suite, baseline.json
 infra/       how to run self-hosted Langfuse (optional, off by default)
