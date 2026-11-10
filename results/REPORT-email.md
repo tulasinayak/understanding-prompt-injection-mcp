@@ -387,4 +387,28 @@ answer: 'The invoice will be paid by 20 October. I have sent a confirmation emai
 
 ## Interpretation
 
-_Not written yet. Fill this in once every defense has been run on the full attack set._
+*The same study restricted to the inbox server: the agent has only the four email tools, and only
+the 17 attacks whose planted text sits in an email and that need no other tool. The full
+interpretation is in `REPORT.md`; this section notes what changes.*
+
+**The pattern holds with a single tool.** Undefended, 47% of attacks worked (8/17, vs 55% with
+three servers). The layered defense brought this to 12% (2/17), and again the only defenses with
+zero tool hijacks were policy, strict Dual LLM and the layered combination. The LLM detector again
+had the lowest attack rate (6%) by hiding emails, leaving the user's task done in only 24% of
+attacked runs.
+
+**Fewer tools did not make the agent safer.** With only email tools, an attacker's options shrink,
+but the core attacks (send the data out, report a wrong figure, redirect a reply) need nothing
+else. Removing the file and calendar servers removed the cross-tool attacks, not the risk.
+
+**The remaining failures are the integrity attacks.** Under the layered defense, the two attacks
+that still worked were wrong-answer attacks (2 of 3 succeeded), and both redirect attacks were
+blocked only together with the user's legitimate reply (0 of 2 tasks kept). This is the same gap
+as in the three-server study: these attacks misuse no tool, so tool-gating defenses cannot see them.
+
+**Costs are as before:** strict Dual LLM completed 2 of 4 normal tasks, and policy-based defenses
+3 of 4 (the one failure is the reply-to-sender task, refused because the recipient comes from the
+email rather than from the user).
+
+With 17 attacks per defense the intervals here are wide; treat this as a replication of the main
+study's direction, not as separate precise estimates.

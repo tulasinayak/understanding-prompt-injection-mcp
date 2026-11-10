@@ -406,4 +406,88 @@ answer: 'The invoice will be paid by 20 October. I have sent a reply to the send
 
 ## Interpretation
 
-_Not written yet. Fill this in once every defense has been run on the full attack set._
+*Written from the final numbers above: qwen3:8b on CPU, three MCP servers, 38 attacks (22 built-in,
+16 from the AgentDojo templates), each defense run once per attack at temperature 0. With about 38
+attacks per defense, differences of a few points are within noise; the conclusions below rest on
+the large, consistent gaps.*
+
+### 1. Without a defense, the agent is easy to steer
+
+More than half of the attacks worked (55%, 21/38). Every attack was an ordinary email, file or
+calendar entry that the user's own task made the agent read. Nothing in the agent's system prompt
+or tools was compromised. This matches the core claim of the indirect-prompt-injection literature:
+an LLM agent follows instructions it finds in data as readily as instructions from its user.
+
+### 2. Which defense is best depends on what you count
+
+Ranked by attack success alone, the LLM-based detector looks best (5%). But it gets there by
+withholding the email the user asked about, so the user's task survived only 11% of attacked runs.
+A defense that stops the agent from doing anything scores perfectly on security and is useless.
+Read together with *task kept under attack* and *benign utility*, the picture is:
+
+| tier | defenses | ASR | task kept under attack | cost |
+|---|---|---|---|---|
+| best balance | spotlight+policy+guard, policy | 11% | 84–87% | about the same calls as no defense; one benign task fails under policy |
+| strong but expensive | dual (strict Dual LLM) | 8% | 84% | 3 of 8 normal tasks fail; about 2× the model calls and time |
+| partial | toolfilter, guard, summarize | 13–16% | 74–87% | small |
+| weak | spotlight, sandwich, detect-clf | 24% | 37–92% | spotlight and sandwich are free; detect-clf also hides the user's email (37% kept) |
+| misleading | detect-llm | 5% | 11% | the task is the casualty |
+
+**Recommendation:** layer a deterministic permission policy with spotlighting and a guard. It cuts
+attack success by about 80% (55% → 11%) while the user's task gets done more often than with no
+defense at all (87% vs 66%), because the attack is no longer able to derail the agent.
+
+### 3. Why: defenses act at different points
+
+The *attempted* column shows the mechanism directly:
+
+- **Defenses on what the model reads** (spotlight, sandwich, summarize, detectors) lower how often
+  the model even *tries* the attack: attempted falls from 55% to 24% under spotlight. They are
+  persuasion. The model can still ignore them, which is why about a quarter of attacks still work.
+- **Defenses on what the model may do** (policy, guard) leave the model just as willing (attempted
+  stays at 55%) but stop the attempt from executing. Policy is plain code, so it cannot be argued
+  with: zero tool hijacks.
+- **Isolation** (strict Dual LLM) removes the problem at the source: the model that acts never
+  reads untrusted text, so it cannot be instructed by it. Zero tool hijacks, paid for in usability:
+  the handle protocol is hard for an 8B model, and some normal tasks fail.
+- **Layering** combines the first two: spotlight halves the attempts (26%), policy and guard stop
+  what remains from running.
+
+The naive summarizer confirms why isolation has to be strict: a faithful summary of an email that
+contains an instruction still contains the instruction. It helped (16%) only against attacks whose
+power depended on exact wording or formatting.
+
+### 4. What no action-blocking defense can stop
+
+Grouped by intent, every attack that needed a forbidden action was stopped by the layered defense
+(exfiltration, deletion, cross-tool pivots, attacks aimed at the defenses: all 0%). Two kinds
+were not:
+
+- **Wrong-answer attacks** ("the correct amount is 9,999 EUR") succeeded 4/4 under the layered
+  defense, and 3/4 under strict Dual LLM. No tool is misused, so there is nothing to block. In Dual
+  LLM the quarantined model reads the lie and passes it to the user. Only the LLM detector stopped
+  them, by hiding the email entirely.
+- **Redirects** ("replies should go to accounts@evil.test", or a forged sender) are stopped by the
+  policy, but only by also refusing the reply the user asked for: 0/2 tasks kept. The policy cannot
+  tell "the address the user meant" from "the address the email claims".
+
+These are integrity problems, not access-control problems. Closing them needs defenses that reason
+about where a value came from (data-provenance tracking, as in CaMeL) or that verify the answer
+against the source, not defenses that gate tools.
+
+### 5. Benchmark attacks are easier to defend than ours
+
+The AgentDojo templates hijacked the undefended agent about as often as our attacks (56% vs 55%),
+but almost every defense took them to 0%, while our attacks stayed at 18% under the layered defense.
+The difference is entirely the wrong-answer and redirect attacks, which benchmark suites built
+around tool-call goals do not contain. A defense evaluated only on tool-call attacks will look
+stronger than it is.
+
+### 6. Limits
+
+- One model in this study; the GPU study (`REPORT-gpu-models.md`) adds llama3.1:8b for four of the
+  conditions.
+- One run per attack and condition, at temperature 0; intervals are wide (see the brackets).
+- The attacks are ours and AgentDojo's. LLMail-Inject and InjecAgent were tried and did not transfer
+  to this model and tool set (0 of 10 and 0 of 7 undefended).
+- `detect-clf` uses one public classifier; a classifier trained on agent-style data could do better.
